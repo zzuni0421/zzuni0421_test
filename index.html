@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>CodeHub — fixed</title>
+<title>CodeHub — self-contained (fixed)</title>
 <style>
-/* 스타일은 기존과 동일하게 간결히 유지 */
+/* 간결하고 안정적인 UI 스타일 */
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0d1117;--panel:#161b22;--muted:#8b949e;--accent:#1f6feb;--text:#e6edf3}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,system-ui,Arial;background:var(--bg);color:var(--text);height:100vh;overflow:hidden}
@@ -133,7 +133,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,system
           <button class="preview-btn" onclick="openInNewTab()">새 탭에서 열기</button>
         </div>
       </div>
-      <!-- sandbox: allow-scripts 만 줌 -> 경고/리스크 줄임 -->
+      <!-- sandbox: allow-scripts 만 주어 위험 최소화 -->
       <iframe id="previewFrame" class="preview-frame" sandbox="allow-scripts"></iframe>
     </div>
   </div>
@@ -144,129 +144,151 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,system
   </div>
 
 <script>
-/* 안전한 base64 helpers */
+/* ===== 유틸: base64 (UTF-8 safe) ===== */
 function base64EncodeUnicode(str){ return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,(m,p)=>String.fromCharCode('0x'+p))); }
 function base64DecodeUnicode(str){ return decodeURIComponent(Array.prototype.map.call(atob(str),c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join('')); }
 
-/* 상태 */
-let currentFile='html';
+/* ===== 상태 초기값 ===== */
+let currentFile = 'html';
 let files = {
   html: document.getElementById('htmlEditor').value,
   css: document.getElementById('cssEditor').value,
   js: document.getElementById('jsEditor').value
 };
 
-/* 라인 번호 업데이트 */
+/* ===== 라인 번호 업데이트 ===== */
 function updateLineNumbers(fileType){
-  const ed=document.getElementById(fileType+'Editor'), ln=document.getElementById(fileType+'LineNumbers');
-  const lines=Math.max(1, ed.value.split('\n').length); let s=''; for(let i=1;i<=lines;i++) s+=i+'\n'; ln.textContent=s;
+  const ed = document.getElementById(fileType + 'Editor');
+  const ln = document.getElementById(fileType + 'LineNumbers');
+  const lines = Math.max(1, ed.value.split('\n').length);
+  let out = '';
+  for(let i=1;i<=lines;i++) out += i + '\n';
+  ln.textContent = out;
 }
 
-/* 탭/파일 바인딩 */
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>switchTab(t.dataset.tab)));
-document.querySelectorAll('.file-item').forEach(it=>it.addEventListener('click',()=>{ document.querySelectorAll('.file-item').forEach(f=>f.classList.remove('active')); it.classList.add('active'); switchTab(it.dataset.file); }));
+/* ===== 탭/파일 클릭 바인딩 ===== */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', ()=> switchTab(t.dataset.tab)));
+document.querySelectorAll('.file-item').forEach(it => it.addEventListener('click', ()=>{
+  document.querySelectorAll('.file-item').forEach(f=>f.classList.remove('active'));
+  it.classList.add('active');
+  switchTab(it.dataset.file);
+}));
 
-/* 에디터 이벤트 */
+/* ===== 에디터 이벤트 ===== */
 ['html','css','js'].forEach(type=>{
-  const ed=document.getElementById(type+'Editor');
-  ed.addEventListener('input',()=>{ files[type]=ed.value; updateLineNumbers(type); updateStatus(); clearTimeout(window.previewTimeout); window.previewTimeout=setTimeout(updatePreview,420); });
-  ed.addEventListener('scroll',()=> document.getElementById(type+'LineNumbers').scrollTop = ed.scrollTop);
+  const ed = document.getElementById(type + 'Editor');
+  ed.addEventListener('input', ()=>{
+    files[type] = ed.value;
+    updateLineNumbers(type);
+    updateStatus();
+    clearTimeout(window.previewTimeout);
+    window.previewTimeout = setTimeout(updatePreview, 420);
+  });
+  ed.addEventListener('scroll', ()=> document.getElementById(type + 'LineNumbers').scrollTop = ed.scrollTop);
 });
 
-/* switchTab */
+/* ===== 탭 전환 ===== */
 function switchTab(tabType){
   saveCurrentFile();
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelector(`[data-tab="${tabType}"]`).classList.add('active');
   document.querySelectorAll('.editor-pane').forEach(p=>p.classList.remove('active'));
-  document.getElementById(tabType+'Pane').classList.add('active');
+  document.getElementById(tabType + 'Pane').classList.add('active');
   currentFile = tabType;
-  document.getElementById(tabType+'Editor').value = files[tabType] || '';
+  document.getElementById(tabType + 'Editor').value = files[tabType] || '';
   updateLineNumbers(tabType);
   updateStatus();
 }
 
-/* save/load current */
-function saveCurrentFile(){ files[currentFile] = document.getElementById(currentFile+'Editor').value; }
-function loadFileContent(fileType){ document.getElementById(fileType+'Editor').value = files[fileType] || ''; updateLineNumbers(fileType); }
+/* ===== save/load helpers ===== */
+function saveCurrentFile(){ files[currentFile] = document.getElementById(currentFile + 'Editor').value; }
+function loadFileContent(fileType){ document.getElementById(fileType + 'Editor').value = files[fileType] || ''; updateLineNumbers(fileType); }
 
-/* escape closing script tag for safe injection */
-function escapeClosingScriptTag(s){ return s.replace(/<\/script>/gi,'<\\/script>'); }
+/* ===== 안전한 스크립트 닫기 이스케이프 ===== */
+function escapeClosingScriptTag(s){ return s.replace(/<\/script>/gi, '<\\/script>'); }
 
-/* build full html */
+/* ===== 안전한 HTML 빌드 (DOMParser 사용) ===== */
 function buildFullHTML(){
-  let html = files.html || '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body></body></html>';
+  const source = files.html || '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body></body></html>';
   const css = files.css || '';
   const js = files.js || '';
 
-  // CSS injection
-  if(/<link[^>]+href=["']style\.css["'][^>]*>/i.test(html)){
-    html = html.replace(/<link[^>]+href=["']style\.css["'][^>]*>/i, `<style>${css}</style>`);
-  } else if(/<\/head>/i.test(html)){
-    html = html.replace(/<\/head>/i, `<style>${css}</style></head>`);
-  } else {
-    html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head>` + html.replace(/^<!DOCTYPE html>/i,'');
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(source, 'text/html');
+
+  if(!doc.head){
+    const head = doc.createElement('head');
+    doc.documentElement.insertBefore(head, doc.body || null);
   }
 
-  // JS injection (escape closing script tag)
-  const safeJs = escapeClosingScriptTag(js);
-  if(/<script[^>]+src=["']script\.js["'][^>]*><\/script>/i.test(html)){
-    html = html.replace(/<script[^>]+src=["']script\.js["'][^>]*><\/script>/i, `<script>${safeJs}<\/script>`);
-  } else if(/<\/body>/i.test(html)){
-    html = html.replace(/<\/body>/i, `<script>${safeJs}<\/script></body>`);
-  } else {
-    html += `<script>${safeJs}<\/script>`;
-  }
+  // 제거: 외부 스타일시트 + 외부 스크립트
+  doc.querySelectorAll('link[rel="stylesheet"]').forEach(e => e.remove());
+  doc.querySelectorAll('script[src]').forEach(e => e.remove());
 
-  return html;
+  // 인라인 CSS 추가
+  const styleEl = doc.createElement('style');
+  styleEl.type = 'text/css';
+  styleEl.textContent = css;
+  doc.head.appendChild(styleEl);
+
+  // 인라인 JS 추가 (닫는 스크립트 태그 이스케이프)
+  const scriptEl = doc.createElement('script');
+  scriptEl.type = 'text/javascript';
+  scriptEl.textContent = escapeClosingScriptTag(js);
+  (doc.body || doc.documentElement).appendChild(scriptEl);
+
+  return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
 
-/* update preview using Blob (safe, no server) */
+/* ===== 미리보기 업데이트 (Blob) ===== */
 function updatePreview(){
   saveCurrentFile();
   const full = buildFullHTML();
-  const blob = new Blob([full], { type:'text/html' });
+  console.log('--- preview html (truncated) ---\n', full.slice(0, 4000)); // 문제 추적용 (길면 잘라서 보여줌)
+  const blob = new Blob([full], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const iframe = document.getElementById('previewFrame');
   iframe.src = url;
-  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  setTimeout(()=> URL.revokeObjectURL(url), 1500);
 }
 function refreshPreview(){ updatePreview(); }
-function openInNewTab(){ saveCurrentFile(); const full = buildFullHTML(); const blob = new Blob([full], { type:'text/html' }); const url = URL.createObjectURL(blob); window.open(url,'_blank'); setTimeout(()=>URL.revokeObjectURL(url),1500); }
+function openInNewTab(){ saveCurrentFile(); const url = URL.createObjectURL(new Blob([buildFullHTML()], {type:'text/html'})); window.open(url,'_blank'); setTimeout(()=>URL.revokeObjectURL(url),1500); }
 
-/* save project json download */
+/* ===== 저장(다운로드) ===== */
 function saveProject(){
   saveCurrentFile();
-  const proj = { html: files.html, css: files.css, js: files.js, t: new Date().toISOString() };
+  const proj = { html: files.html, css: files.css, js: files.js, timestamp: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(proj,null,2)], { type:'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download='codehub-project.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-/* share as base64 string */
+/* ===== 공유(문자열) ===== */
 function shareProject(){
   saveCurrentFile();
   try{
     const encoded = base64EncodeUnicode(JSON.stringify(files));
-    navigator.clipboard.writeText(encoded).then(()=>alert('프로젝트 문자열이 복사되었습니다. 받는 쪽에서 loadFromString(...) 사용하세요.'));
-  }catch(e){ alert('공유 실패: '+e.message); }
+    // 로컬 환경은 복사 실패할 수 있으니 alert와 clipboard 둘 다 시도
+    navigator.clipboard?.writeText(encoded).then(()=>alert('프로젝트 문자열이 복사되었습니다.\n붙여넣어 loadFromString(encoded)로 불러오세요.'), ()=>alert('클립보드 복사 실패 — 문자열을 수동으로 복사하세요:\n\n' + encoded));
+  }catch(e){ alert('공유 실패: ' + e.message); }
 }
 function loadFromString(encoded){
-  try{
+  try {
     const obj = JSON.parse(base64DecodeUnicode(encoded));
     files = obj;
-    document.getElementById('htmlEditor').value=files.html||'';
-    document.getElementById('cssEditor').value=files.css||'';
-    document.getElementById('jsEditor').value=files.js||'';
-    updateLineNumbers('html'); updateLineNumbers('css'); updateLineNumbers('js'); updatePreview();
-  }catch(e){ alert('로드 실패'); }
+    document.getElementById('htmlEditor').value = files.html || '';
+    document.getElementById('cssEditor').value = files.css || '';
+    document.getElementById('jsEditor').value = files.js || '';
+    updateLineNumbers('html'); updateLineNumbers('css'); updateLineNumbers('js');
+    updatePreview();
+  } catch(e){ alert('로드 실패: 잘못된 문자열'); }
 }
 
-/* templates (NOTE: all </script> inside strings are escaped as <\/script> if needed) */
+/* ===== 템플릿 안전하게 로드 ===== */
 function loadTemplate(type){
   const templates = {
     basic: {
-      html: '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"><title>기본</title><link rel="stylesheet" href="style.css"></head><body><header><h1>기본 페이지</h1></header><script src="script.js"></script></body></html>',
+      html: '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"><title>기본</title><link rel="stylesheet" href="style.css"></head><body><header><h1>기본 페이지</h1></header><script src="script.js"><\/script></body></html>',
       css: 'body{font-family:Arial,sans-serif;margin:0;padding:0}header{background:#2c3e50;color:#fff;padding:1rem;text-align:center}',
       js: 'console.log(\"basic template loaded\")'
     },
@@ -281,10 +303,11 @@ function loadTemplate(type){
       js: 'const c=document.getElementById(\"game\");if(c){const g=c.getContext(\"2d\");g.fillStyle=\"#fff\";g.fillRect(20,20,60,60)}'
     }
   };
+
   if(templates[type]){
     files.html = templates[type].html;
-    files.css = templates[type].css;
-    files.js = templates[type].js;
+    files.css  = templates[type].css;
+    files.js   = templates[type].js;
     document.getElementById('htmlEditor').value = files.html;
     document.getElementById('cssEditor').value = files.css;
     document.getElementById('jsEditor').value = files.js;
@@ -293,7 +316,7 @@ function loadTemplate(type){
   } else alert('템플릿 없음');
 }
 
-/* addNewFile */
+/* ===== 새 파일(간단 처리) ===== */
 function addNewFile(){
   const t = prompt('새 파일 유형 입력 (html / css / js)', 'html');
   if(!t) return;
@@ -301,19 +324,22 @@ function addNewFile(){
   switchTab(t);
 }
 
-/* run */
+/* ===== 실행 버튼 ===== */
 function runCode(){ updatePreview(); }
 
-/* try load from URL (base64) */
+/* ===== URL에서 공유 문자열로 로드 시도 ===== */
 (function(){
   const params = new URLSearchParams(location.search);
   const p = params.get('project');
-  if(p){ try{ loadFromString(p); }catch(e){ console.warn('URL load failed', e); updatePreview(); } } else updatePreview();
+  if(p){
+    try { loadFromString(p); } catch(e) { console.warn('URL load failed', e); updatePreview(); }
+  } else updatePreview();
 })();
 
-function updateStatus(){ const lines = document.getElementById(currentFile+'Editor').value.split('\n').length; document.getElementById('statusInfo').textContent = currentFile.toUpperCase() + ' | 라인 ' + lines; }
+/* ===== 상태바 ===== */
+function updateStatus(){ const lines = document.getElementById(currentFile + 'Editor').value.split('\n').length; document.getElementById('statusInfo').textContent = currentFile.toUpperCase() + ' | 라인 ' + lines; }
 
-/* 초기 */
+/* 초기화 */
 updateLineNumbers('html'); updateLineNumbers('css'); updateLineNumbers('js');
 updateStatus();
 </script>
